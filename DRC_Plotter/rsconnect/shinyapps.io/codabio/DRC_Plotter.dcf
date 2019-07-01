@@ -1,0 +1,12 @@
+name: DRC_Plotter
+title: DRC_Plotter
+username:
+account: codabio
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 759891
+bundleId: 1926726
+url: https://codabio.shinyapps.io/DRC_Plotter/
+when: 1552093589.87403
+asMultiple: FALSE
+asStatic: FALSE

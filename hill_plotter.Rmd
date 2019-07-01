@@ -1,0 +1,372 @@
+---
+title: "Hill Eq - R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+
+Libraries/Dependencies
+```{r}
+#lseq
+library(emdbook)
+library(ggplot2)
+# library(readxl)
+library(scales)
+library(RColorBrewer)
+library(utils)
+library(Hmisc)
+library(tidyverse)
+library(dplyr)
+```
+
+
+**Hill Equation and Geometric Mean Functions**
+```{r}
+#Hill Equation
+logistic_array = function(x, beta) {
+  return(beta[1] + (beta[2]-beta[1])/(1 + (x/beta[3])^(-beta[4])))
+}
+
+
+#Geometric Mean Function
+geomean=function(ligands, df, col_names) {
+  
+  "geometric.mean" <- 
+    function(x,na.rm=TRUE)
+    { 
+      exp(mean(log(x),na.rm=na.rm))
+    }
+  
+#GEOMETRIC STDEV
+geom_sd=function(gmean, n, A) {
+  exp(sqrt(sum(log(A/gmean)**2)/n))
+}
+
+#Creates placeholder Standard Deviation values for ligand-construct pairs for which there were no replicates
+gsd_df_placeholders=function(df_keep){
+  sd_cols=c('n', 'ec50_sd', 'ec50_lower', 'ec50_upper', 'ec50_y_Norm')
+  
+  gsd_df=data.frame()
+  ec50_y_list=array()
+  for (l in 1:nrow(df_keep)) {
+    
+    gsd_df=rbind.data.frame(gsd_df, c(1, rep(NaN, (length(sd_cols)-2)))) #changed to 1 from NaN
+    
+    ec50_x<-df_keep[l, 'ec50'] #Finds x-coordinate ec50 value
+    
+    params<-as.numeric(df_keep[l,] %>%
+                    select(bottom, top, ec50, hill)) #Finds parameters for hill eq
+    
+    ec50_y=logistic_array(ec50_x, params)/params[2]*100 # Calculates y-coordinate ec50
+    
+    ec50_y_list[[l]]=ec50_y
+  }
+  
+  gsd_df=cbind.data.frame(gsd_df, ec50_y_list)
+  colnames(gsd_df)<-sd_cols
+  
+  df_keep=cbind.data.frame(df_keep, gsd_df)
+  
+  return(df_keep)
+}
+  
+  #Calculate Geometric mean and subset data
+  ligands_to_drop=array()
+  ligan_df=data.frame()
+  for(i in ligands){
+    if (any(duplicated(df[(df['ligand']==i),]$construct))) {
+      ligands_to_drop=c(ligands_to_drop, i)
+      for (c in unique(df[(df['ligand']==i),]$construct)) {
+        print(paste(i,'-', c))
+        
+        #index by ligand
+        df_index=df[df['ligand']==i,]
+        #index by column
+        df_index=df_index[df_index['construct']==c,]
+        
+        #Bottom gMean
+        gm_bot=geometric.mean(df_index[,'bottom']) #Geometric Mean of Bottom Values
+        
+        #Top gMean and gSD
+        gm_top=geometric.mean(df_index[,'top']) #Geometric Mean of Top Values
+        
+        #Hill gMean and gSD
+        gm_hill=geometric.mean(df_index[,'hill']) #Geometric Mean of Hill Values
+        
+        #ec50 gMean and gSD
+        ec50_ind=df_index[,'ec50'] #List of ec50 Values
+        gm_ec50=geometric.mean(ec50_ind) #Geometric Mean of ec50 Values
+        ec50_n=length(ec50_ind) #Number of ec50 Values used to calculate stats
+        ec50_sd=geom_sd(gm_ec50, ec50_n, ec50_ind) #Geometric Standard Deviation of ec50 Values
+        ec50_lower=gm_ec50/ec50_sd #Calculates left bound of ec50 errorbar
+        ec50_upper=gm_ec50*ec50_sd #Calculates right bound of ec50 errorbar
+        ec50_y_Norm=logistic_array(gm_ec50, c(gm_bot, gm_top, gm_ec50, gm_hill))/gm_top*100 #Calculates y-coordinate of ec50 (Normalized to Top)
+        
+
+        ligan_df=rbind.data.frame(ligan_df, cbind.data.frame('ligand'=i, 'construct'=c, 'bottom'=gm_bot, 'top'=gm_top, 'ec50'=gm_ec50, 'hill'=gm_hill,  'n'=ec50_n, 'ec50_sd'=ec50_sd, 'ec50_upper'=ec50_upper, 'ec50_lower'=ec50_lower, 'ec50_y_Norm'=ec50_y_Norm))
+      }
+    }
+  }
+  
+  ligands_to_drop=ligands_to_drop[!is.na(ligands_to_drop)]
+  
+  ligands_to_keep=ligands[!(ligands %in% ligands_to_drop)]
+  
+  df_keep=data.frame()
+  for (l in ligands_to_keep) {
+    print(l)
+    df_keep=rbind.data.frame(df_keep, df[df$ligand==l, col_names])
+  }
+  
+  df_keep=gsd_df_placeholders(df_keep)
+  
+  df=rbind.data.frame(ligan_df, df_keep)
+  print(df) #FOR LIST OF GEOMETRIC MEANS
+  
+  return(df)
+}
+
+
+#Save Plot Function
+save_plot=function(ligand, graph, folder_path){
+  save_path=paste0(folder_path,'\\',ligand,'.png')
+  png(save_path, width = 750, height = 500)
+  plot(graph)
+  dev.off() 
+}
+
+```  
+
+
+def logistic_array(x, beta):
+        """ Logistic function for dose-response curve, compact coefficients
+        Parameters
+        -----------
+        beta = list/array of length 4
+        beta[1] = bottom
+        beta[2] = top
+        beta[3] = ec50
+        beta[4] = hill_coefficient
+        x = Ligand concentration
+        Returns
+        -----------
+        f(x): predicted ligand current
+        """
+        return (beta[0] + (beta[1]-beta[0])/(1 + (x/beta[2])**-beta[3]))
+
+
+
+**Plot Bounds Functions & Error Bar Function**
+```{r plot_bounds}
+roundUp=function(x) {10^ceiling(log10(x))}
+roundDown=function(x) {10^floor(log10(x))}
+
+bounds=function(y, beta) {
+  # inverse_eq=function(y) {beta[3]*exp(-log(abs(((beta[2]-beta[1])/(y*beta[2])-beta[1])-1))/beta[4])}
+  inverse_eq=function(y, beta) {beta[3]*exp(((beta[2]-beta[1])/(-beta[4]*(y*(beta[2])-beta[1])))+(1/beta[4]))}
+  bounds=inverse_eq(y, beta)
+  return(bounds)
+}
+
+plot_bounds=function(i) {
+  bounds_lower=array()
+  bounds_upper=array()
+  for(j in 1:nrow(eval(parse(text=i)))) {
+  
+    beta=as.numeric(eval(parse(text=i))[j,c('bottom', 'top', 'ec50', 'hill')])
+    
+    bounds_lower=c(bounds_lower, bounds(0.25, beta))
+    bounds_upper=c(bounds_upper, roundUp(bounds(0.9, beta))*10)
+    
+  }
+
+  bounds_lower=bounds_lower[!is.na(bounds_lower)]
+  bounds_lower=roundDown(min(bounds_lower))
+
+  bounds_upper=bounds_upper[!is.na(bounds_upper)]
+  bounds_upper=roundUp(max(bounds_upper))
+  
+  bounds=c(bounds_lower, bounds_upper)
+  # print(bounds)
+  return(bounds)
+}
+
+
+#Function to produce df with errorbar params
+errorbars=function(df, i) {
+    #FOR TC & AZD
+  if (i=="tc_6987" | i=="azd_0328" | i=="abt_126") {
+    i=gsub('_','-',i)
+  }
+  
+  errorbar_df<-(df %>%
+                  filter(ligand==i) %>%
+                  select(construct, ec50_y_Norm, ec50, ec50_lower,ec50_upper))
+
+  return(errorbar_df)
+}
+  
+```
+
+
+**Load and Preprocess Data**  
+```{r load_and_preprocess_data}
+#Select data in pop-up window for 
+# data_path=choose.files(default = "Z:\\Shared\\Company\\Confidential\\Research\\Team IonFlux\\Dose Response Curves", caption = "Select Data (CSV Format)")
+
+
+#HARCODED PATH FOR TESTING
+data_path="C:\\Users\\Vasco Morais\\Documents\\computation\\hill_plotter\\test_data.csv"
+
+p_df <- read.csv(data_path, header = T, stringsAsFactors=FALSE, strip.white = TRUE)
+
+
+#FIX COL HEADING
+col_names<-c('ligand', 'construct',	'bottom',	'top',	'ec50',	'hill')
+colnames(p_df)<-col_names
+
+#Convert list of ligands to lowercase
+p_df$ligand<-sapply(p_df$ligand, tolower)
+
+#ONLY IF A7_4
+#change 'a7_4' to 'pcoda102'
+if ('a7_4' %in% p_df$construct) {
+  p_df[p_df['construct']=='a7_4',]['construct']='CODA102'
+}
+
+
+#remove rows without data
+p_df=p_df[col_names][complete.cases(p_df[col_names]),]
+
+#Color Hard-coded:
+# construct.colors=c('#F8766D', '#C49A00', '#53B400', '#00C094', '#00B6E', '#A58AFF', '#FB61D7')
+construct.colors=brewer.pal(length(unique(p_df$construct)), "Dark2") #Dark2 works for 8 constructs in total, Set3 is one color larger
+names(construct.colors)<-levels(as.factor(unique(p_df$construct)))#Loads in constructs and assigns to color
+
+#Constructs to show
+constructs_to_show=c("pcoda153", "pcoda218", "pcoda333", "pcoda335", "pcoda339", "pcoda377", "pcoda71", "pcoda102")
+#Subset constructs
+constructs_to_show=c("pcoda71", "pcoda102", "pcoda333", "pcoda335", "pcoda339", "pcoda377") #Modify this to change which constructs you want to show
+#Use all constructs
+constructs_to_show=levels(as.factor(unique(p_df$construct)))
+
+#subset sum_stats by constructs_to_show
+df=data.frame()
+for (c in constructs_to_show) {
+  df=rbind.data.frame(df, p_df[p_df['construct']==c,])
+}
+
+#list of ligands
+ligands<-unique(df$ligand)
+
+# Removes rows where 'top' bounds is under 1000
+df=df[df['top']>1000,]
+
+#Geometric Mean
+df=geomean(ligands, df, col_names)
+```
+
+
+
+Loop to cycle through datasets
+```{r}
+#Save Plot Location
+folder_path=choose.dir(default = "Z:\\Shared\\Company\\Confidential\\Research\\Team IonFlux\\Dose Response Curves", caption = "Select Save Destination")
+
+#get rid of problematic naming elements
+lig_name<-gsub('-','_',ligands)
+
+#changes column name of ligand_concentration to match lig_name elements
+#names(ligand_concentrations)<-lig_name
+#ligand_concentrations<-ligand_concentrations[1:7,]
+
+#creates variables for each ligand
+for(i in 1:length(ligands)){
+  assign(noquote(paste(lig_name[i])), df[df['ligand']==ligands[i],])
+}
+
+
+#Create plots
+for(i in lig_name) {
+  print(eval(i))
+  
+  hill_eq=data.frame()
+
+  for(j in 1:nrow(eval(parse(text=i)))) {
+ 
+    beta=as.numeric(eval(parse(text=i))[j,c('bottom', 'top', 'ec50', 'hill')])
+    
+    # x_range=lseq(conc[1],conc[7], 500) #if there is a set range of dose concnetrations
+    x_range=lseq(plot_bounds(i)[1], plot_bounds(i)[2], 500)
+    # x_range=lseq(1, 10000, 500)
+    
+    drug_curve=logistic_array(x = x_range, beta)/beta[2]*100
+    
+    #Normalized to pcoda71
+    # p71_top=eval(parse(text=i))[eval(parse(text=i))['construct']=='pcoda71', 'top']
+    # drug_curve=logistic_array(x = x_range, beta)/p71_top
+    
+    construct=rep(eval(parse(text=i))[j,2], 500)
+    
+    hill_eq=rbind(hill_eq, as.data.frame(cbind.data.frame(x_range, drug_curve, construct)))
+    
+    colnames(hill_eq)=c('x_range', 'drug_curve', 'construct')
+  }
+  
+  
+  drug_plot=ggplot(hill_eq, aes(x=x_range, y=drug_curve)) +geom_line(size=2, alpha=0.5, aes(group=construct, color=construct)) +
+    scale_x_log10(breaks = scales::trans_breaks("log10", function(x) 10^x),
+              labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+    annotation_logticks(sides = 'b') + scale_color_manual(values=construct.colors)
+  
+  #+geom_segment(aes(x = ec50_71, y =y_top, xend=ec50_71, yend=y_bottom), linetype='dashed', size= 1.25, colour='violet')
+  #data=(d, mapping=aes(x=ec50_71, y=y, xend=x+vx, yend=y+vy), arrow=arrow(), size=2, color="blue")
+   
+  #For ACH & Facinicline
+  if (i=="facinicline" | i=="acetylcholine" | i=='nicotine') {
+    drug_xlab=Hmisc::capitalize(i)
+}
+
+  #FOR TC & AZD
+  if (i=="tc_6987" | i=="azd_0328" | i=="abt_126") {
+    drug_xlab=toupper(i)
+    drug_xlab=gsub('_','-',drug_xlab)
+  } else {
+    drug_xlab=toupper(i)
+    drug_xlab=gsub('_','-',drug_xlab)
+  }
+ 
+  
+  #Produce DRC Plot
+  drug_plot_aes=drug_plot +
+    xlab(bquote(.(drug_xlab) ~ "["*mu*M*"]")) +
+    ylab('Normalized Peak Current \n (% of Imax)') +
+    theme_grey(base_size = 22) +
+    theme(legend.title = element_blank()) +
+    ggtitle(paste(eval(parse(text=i))[j,2])) + #overwritten below
+    ggtitle(label = NULL)
+  
+  drug_plot_stat= drug_plot_aes +
+    geom_errorbarh(data=errorbars(df, i), mapping=aes(y=ec50_y_Norm, x=ec50, xmin=ec50_lower, xmax=ec50_upper, color=construct), height=7, size=1.5, alpha=0.5) +
+    geom_point(data=errorbars(df, i), mapping=aes(group=construct, y=ec50_y_Norm, x=ec50, color=construct), size=4, shape=21, na.rm = TRUE)
+  
+  print(drug_plot_stat)
+  
+  save_plot(i, drug_plot_stat, folder_path)
+}
+
+# Write CSV contianing Geometric Means to Folder Output
+print(df)
+write.table(df, file = paste0(folder_path,'\\geometric_mean_df.csv'), row.names=FALSE, na="",col.names=TRUE, sep=",")
+
+
+  #eval(parse(lig_name[1]))
+```
+
+
+
+
+
